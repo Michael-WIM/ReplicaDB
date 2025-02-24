@@ -36,9 +36,10 @@ public class ReplicaDB {
     private static final int ERROR = 1;
 
     public static void main(String[] args) {
-
         int exitCode = 0;
         long start = System.nanoTime();
+
+        LOG.info("HEllo");
 
         // Parse Option Arguments
         ToolOptions options = null;
