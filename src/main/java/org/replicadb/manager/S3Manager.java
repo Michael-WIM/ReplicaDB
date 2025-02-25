@@ -267,7 +267,7 @@ public class S3Manager extends SqlManager {
                 .numStreams(numStreams)
                 .numUploadThreads(2)
                 .queueCapacity(2)
-                .partSize(20);
+                .partSize(10);
 
         final List<MultiPartOutputStream> streams = manager.getMultiPartOutputStreams();
         int processedRows = 0;
