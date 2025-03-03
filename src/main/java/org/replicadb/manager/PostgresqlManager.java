@@ -15,7 +15,9 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
@@ -63,13 +65,21 @@ public class PostgresqlManager extends SqlManager {
                 tableName = getQualifiedStagingTableName();
             }
 
+            Set<String> sourceColumns = getColumnsFromResultSet(rsmd);
+
+            PostgresqlManager sinkManager = new PostgresqlManager(options, DataSourceType.SINK);
+
+            try (Connection sinkConnection = sinkManager.getConnection()) {
+                Set<String> sinkColumns = getSinkTableColumns(sinkConnection, tableName);
+                alterSinkTable(sinkConnection, tableName, sourceColumns, sinkColumns);
+            }
+
             String allColumns = getAllSinkColumns(rsmd);
 
             // Get Postgres COPY meta-command manager
             PgConnection copyOperationConnection = this.connection.unwrap(PgConnection.class);
             CopyManager copyManager = new CopyManager(copyOperationConnection);
             String copyCmd = getCopyCommand(tableName, allColumns);
-            LOG.info("Copy Command: " + copyCmd );
             copyIn = copyManager.copyIn(copyCmd);
 
             char unitSeparator = 0x1F;
@@ -170,6 +180,65 @@ public class PostgresqlManager extends SqlManager {
         this.getConnection().commit();
 
         return totalRows;
+    }
+
+    private Set<String> getColumnsFromResultSet(ResultSetMetaData rsmd) throws SQLException {
+        Set<String> columns = new HashSet<>();
+        int columnCount = rsmd.getColumnCount();
+        for (int i = 1; i <= columnCount; i++) {
+            columns.add(rsmd.getColumnName(i).toLowerCase()); // use lowercase to avoid case sensitivity issues
+        }
+        return columns;
+    }
+
+    private Set<String> getSinkTableColumns(Connection sinkConnection, String tableName) throws SQLException {
+        // Default schema to "public" if none is specified
+        String schemaName = "public";
+        String simpleTableName = tableName;
+    
+        if (tableName.contains(".")) {
+            String[] parts = tableName.split("\\.");
+            schemaName = parts[0]; 
+            simpleTableName = parts[1]; 
+        }
+    
+        String query = "SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ?";
+    
+        LOG.info("Executing query: " + query + " with schema: " + schemaName + " and table: " + simpleTableName);
+    
+        Set<String> columns = new HashSet<>();
+    
+        try (PreparedStatement stmt = sinkConnection.prepareStatement(query)) {
+            stmt.setString(1, schemaName);
+            stmt.setString(2, simpleTableName);
+    
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    columns.add(rs.getString("column_name").toLowerCase());
+                }
+            }
+        }
+    
+        return columns;
+    }
+    
+    // Add missing columns to the sink table
+    private void alterSinkTable(Connection sinkConnection, String tableName, Set<String> sourceColumns, Set<String> sinkColumns) throws SQLException {
+        Set<String> missingColumns = new HashSet<>(sourceColumns);
+        missingColumns.removeAll(sinkColumns);
+    
+        for (String column : missingColumns) {
+            String alterCommand = String.format("ALTER TABLE %s ADD COLUMN %s TEXT;", tableName, column);
+            try (Statement stmt = sinkConnection.createStatement()) {
+                stmt.execute(alterCommand);
+                LOG.info("Column added: " + column + " to sink table: " + tableName);
+            } catch (SQLException e) {
+                LOG.error("Failed to add column: " + column, e);
+                throw e;
+            }
+        }
+
+        sinkConnection.commit();
     }
 
     private String getCopyCommand(String tableName, String allColumns) {
