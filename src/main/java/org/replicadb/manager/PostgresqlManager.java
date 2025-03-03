@@ -69,6 +69,7 @@ public class PostgresqlManager extends SqlManager {
             PgConnection copyOperationConnection = this.connection.unwrap(PgConnection.class);
             CopyManager copyManager = new CopyManager(copyOperationConnection);
             String copyCmd = getCopyCommand(tableName, allColumns);
+            LOG.Info("Copy Command: " + copyCmd );
             copyIn = copyManager.copyIn(copyCmd);
 
             char unitSeparator = 0x1F;
